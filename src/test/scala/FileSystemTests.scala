@@ -23,8 +23,8 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
 
   test("create and read a file") {
     val program = for {
-      _ <- FileSystem.interpret(CreateDirectory("/docs"))
-      _ <- FileSystem.interpret(CreateFile("/docs", "file1.txt", "Hello, World!".getBytes("UTF-8"), ".txt", true))
+      _    <- FileSystem.interpret(CreateDirectory("/docs"))
+      _    <- FileSystem.interpret(CreateFile("/docs", "file1.txt", "Hello, World!".getBytes("UTF-8"), ".txt", true))
       file <- FileSystem.interpret(ReadFile("/docs/file1.txt"))
     } yield file
 
@@ -37,8 +37,8 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
 
   test("create a user and switch to the user") {
     val program = for {
-      _ <- FileSystem.interpret(CreateUser("user1", "password1"))
-      _ <- FileSystem.interpret(SwitchUser(User("user1", "password1")))
+      _           <- FileSystem.interpret(CreateUser("user1", "password1"))
+      _           <- FileSystem.interpret(SwitchUser(User("user1", "password1")))
       currentUser <- FileSystem.interpret(WhoAmI)
     } yield currentUser
 

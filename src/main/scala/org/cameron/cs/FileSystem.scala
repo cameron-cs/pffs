@@ -13,15 +13,14 @@ import scala.annotation.tailrec
 
 object FileSystem {
 
-  // Case class representing the state of the file system
-
+  // case class representing the state of the file system
   case class FileSystemState(currentDir: Directory, currentUser: User, rootDir: Directory, users: Map[String, User], currentPath: String = "/")
 
   // Type alias for a state transformation in the context of IO
   type FileSystemStateT[A] = StateT[IO, FileSystemState, A]
 
-  // Default permissions for a directory
-  val defaultDirectoryPermissions: Set[Permission] = Set(Read)
+  // default permissions for a directory
+  private val defaultDirectoryPermissions: Set[Permission] = Set(Read)
 
   /**
    * Creates a directory at the specified path.
@@ -34,10 +33,11 @@ object FileSystem {
     ensureParentDirectoryExists(path) *> updateState { state =>
       val pathList = pathToList(path)
       val newDir = Directory(pathList.last, Map.empty, FileMetadata(state.currentUser, Map(state.currentUser.name -> defaultDirectoryPermissions), Instant.now, Instant.now, state.currentUser.name))
-      state.copy(rootDir = updateDirectory(
-        state.rootDir,
-        pathList.dropRight(1),
-        self => self.copy(contents = self.contents + (newDir.name -> newDir)))
+      state.copy(rootDir =
+        updateDirectory(
+          state.rootDir,
+          pathList.dropRight(1),
+          self => self.copy(contents = self.contents + (newDir.name -> newDir)))
       )
     }
 
@@ -77,7 +77,7 @@ object FileSystem {
       })))
     case head :: tail => dir.contents.get(head).fold(dir) {
       case d: Directory => dir.copy(contents = dir.contents.updated(head, updatePermissions(d, tail, permissions, username)))
-      case _ => dir
+      case _            => dir
     }
   }
 
@@ -113,9 +113,10 @@ object FileSystem {
    * @return The state transformation representing the creation of the user.
    */
   def createUser(name: String, password: String): FileSystemStateT[Unit] = updateState { state =>
-    if (state.currentUser.name == "root") {
+    if (state.currentUser.name == "root")
       state.copy(users = state.users + (name -> User(name, password)))
-    } else state
+    else
+      state
   }
 
   /**
@@ -126,9 +127,10 @@ object FileSystem {
    * @return The state transformation representing the removal of the user.
    */
   def removeUser(username: String): FileSystemStateT[Unit] = updateState { state =>
-    if (state.currentUser.name == "root") {
+    if (state.currentUser.name == "root")
       state.copy(users = state.users - username)
-    } else state
+    else
+      state
   }
 
   /**
@@ -164,8 +166,8 @@ object FileSystem {
   def writeFile(path: String, content: Array[Byte], user: User): FileSystemStateT[Unit] = updateState { state =>
     checkPermission(user, Write, path, state.rootDir).fold(state)(_ =>
       state.copy(rootDir = updateEntity(state.rootDir, pathToList(path), {
-        case file: File => file.copy(content = content, metadata = file.metadata.copy(lastModified = Instant.now, modifiedBy = user.name))
-        case dir: Directory => dir // No update for directories
+        case file: File     => file.copy(content = content, metadata = file.metadata.copy(lastModified = Instant.now, modifiedBy = user.name))
+        case dir: Directory => dir // no update for directories
       }))
     )
   }
@@ -245,7 +247,7 @@ object FileSystem {
     val updatedContents = dir.contents.map {
       case (name, entity) => entity match {
         case subDir: Directory => newName -> renameDirectory(subDir, name)
-        case file: File => name -> file.copy(name = newName)
+        case file: File        => name -> file.copy(name = newName)
       }
     }
     dir.copy(name = newName, contents = updatedContents)
@@ -278,9 +280,9 @@ object FileSystem {
       checkPermission(user, Read, srcPath, state.rootDir).flatMap(_ => findEntity(state.rootDir, pathToList(srcPath)))
     }
     _ <- entity match {
-      case Some(file: File) => createFile(pathToList(destPath).dropRight(1).mkString("/"), pathToList(destPath).last, file.content, file.extension, file.readable)
+      case Some(file: File)           => createFile(pathToList(destPath).dropRight(1).mkString("/"), pathToList(destPath).last, file.content, file.extension, file.readable)
       case Some(directory: Directory) => copyDirectory(directory, pathToList(destPath), user)
-      case None => StateT.pure[IO, FileSystemState, Unit](())
+      case None                       => StateT.pure[IO, FileSystemState, Unit](())
     }
   } yield ()
 
@@ -294,7 +296,7 @@ object FileSystem {
   def copyDirectory(directory: Directory, destPath: List[String], user: User): FileSystemStateT[Unit] = for {
     _ <- createDirectory(destPath.mkString("/"))
     _ <- directory.contents.toList.traverse {
-      case (name, file: File) => createFile(destPath.mkString("/"), name, file.content, file.extension, file.readable)
+      case (name, file: File)        => createFile(destPath.mkString("/"), name, file.content, file.extension, file.readable)
       case (name, subDir: Directory) => copyDirectory(subDir, destPath :+ name, user)
     }
   } yield ()
@@ -318,15 +320,17 @@ object FileSystem {
   private def ensureParentDirectoryExists(path: String): FileSystemStateT[Unit] = {
     val parentPath = pathToList(path).dropRight(1)
     parentPath.foldLeft(StateT.pure[IO, FileSystemState, Unit](())) { (state, dir) =>
-      state.flatMap(_ => updateState { fsState =>
-        if (findEntity(fsState.rootDir, pathToList(fsState.rootDir.name) ++ List(dir)).isEmpty) {
-          val newDir = Directory(dir, Map.empty, FileMetadata(fsState.currentUser, Map(fsState.currentUser.name -> Set(Read, Write, Execute)), Instant.now, Instant.now, fsState.currentUser.name))
-          fsState.copy(rootDir =
-            updateDirectory(
-              fsState.rootDir,
-              pathToList(newDir.name).dropRight(1),
-              self => self.copy(contents = self.contents + (newDir.name -> newDir))))
-        } else fsState
+      state.flatMap(_ =>
+        updateState { fsState =>
+          if (findEntity(fsState.rootDir, pathToList(fsState.rootDir.name) ++ List(dir)).isEmpty) {
+            val newDir = Directory(dir, Map.empty, FileMetadata(fsState.currentUser, Map(fsState.currentUser.name -> Set(Read, Write, Execute)), Instant.now, Instant.now, fsState.currentUser.name))
+            fsState.copy(rootDir =
+              updateDirectory(
+                fsState.rootDir,
+                pathToList(newDir.name).dropRight(1),
+                self => self.copy(contents = self.contents + (newDir.name -> newDir))))
+          }
+          else fsState
       })
     }
   }
@@ -348,10 +352,11 @@ object FileSystem {
    */
   def cd(path: String): FileSystemStateT[Unit] = updateState { state =>
     val newPath = if (path.startsWith("/")) pathToList(path) else pathToList(state.currentPath) ++ pathToList(path)
-    findEntity(state.rootDir, newPath).collect {
-      case dir: Directory if hasPermission(state.currentUser.name, dir, Read) =>
-        state.copy(currentDir = dir, currentPath = newPath.mkString("/", "/", ""))
-    }.getOrElse(state)
+    findEntity(state.rootDir, newPath)
+      .collect {
+        case dir: Directory if hasPermission(state.currentUser.name, dir, Read) =>
+          state.copy(currentDir = dir, currentPath = newPath.mkString("/", "/", ""))
+      }.getOrElse(state)
   }
 
   /**
@@ -382,7 +387,7 @@ object FileSystem {
    */
   @tailrec
   private def findEntityWithPermissionCheck(user: User, permission: Permission, path: List[String], dir: Directory): Option[Unit] = path match {
-    case Nil => Some(())
+    case Nil          => Some(())
     case head :: tail =>
       dir.contents.get(head) match {
         case Some(subDir: Directory) if hasPermission(user.name, subDir, permission)        =>
@@ -401,12 +406,12 @@ object FileSystem {
    * @return An option containing the entity if found, None otherwise.
    */
   private def findEntity(dir: Directory, path: List[String]): Option[FileSystemEntity] = path match {
-    case Nil => Some(dir)
-    case head :: tail => dir.contents.get(head).flatMap {
-      case subDir: Directory => findEntity(subDir, tail)
-      case file: File if tail.isEmpty => Some(file)
-      case _ => None
-    }
+    case Nil                 => Some(dir)
+    case head :: tail        => dir.contents.get(head).flatMap {
+                                  case subDir: Directory => findEntity(subDir, tail)
+                                  case file: File if tail.isEmpty => Some(file)
+                                  case _ => None
+                                }
   }
 
   /**
@@ -455,23 +460,23 @@ object FileSystem {
    */
   def interpret[A](op: FileSystemOp[A]): FileSystemStateT[A] = op match {
     case CreateFile(path, name, content, extension, readable) => createFile(path, name, content, extension, readable)
-    case CreateDirectory(path) => createDirectory(path)
-    case ReadFile(path) => readFile(path)
-    case WriteFile(path, content, user) => writeFile(path, content, user)
-    case Delete(path) => delete(path)
-    case ListDirectory(path) => listDirectory(path)
-    case Pwd() => pwd()
-    case Copy(srcPath, destPath, user) => copy(srcPath, destPath, user)
-    case Move(srcPath, destPath, user) => move(srcPath, destPath, user)
-    case SwitchUser(user) => switchUser(user)
-    case SetInitialPermissions() => setInitialPermissions()
-    case Rename(srcPath, destPath, recursive) => rename(srcPath, destPath, recursive)
-    case CreateUser(name, password) => createUser(name, password)
-    case GrantPermissions(path, username, permissions) => grantPermissions(path, username, permissions)
-    case Cd(path) => cd(path)
-    case ListUsers => listUsers()
-    case RemoveUser(username) => removeUser(username)
-    case WhoAmI               => whoAmI()
+    case CreateDirectory(path)                                => createDirectory(path)
+    case ReadFile(path)                                       => readFile(path)
+    case WriteFile(path, content, user)                       => writeFile(path, content, user)
+    case Delete(path)                                         => delete(path)
+    case ListDirectory(path)                                  => listDirectory(path)
+    case Pwd()                                                => pwd()
+    case Copy(srcPath, destPath, user)                        => copy(srcPath, destPath, user)
+    case Move(srcPath, destPath, user)                        => move(srcPath, destPath, user)
+    case SwitchUser(user)                                     => switchUser(user)
+    case SetInitialPermissions()                              => setInitialPermissions()
+    case Rename(srcPath, destPath, recursive)                 => rename(srcPath, destPath, recursive)
+    case CreateUser(name, password)                           => createUser(name, password)
+    case GrantPermissions(path, username, permissions)        => grantPermissions(path, username, permissions)
+    case Cd(path)                                             => cd(path)
+    case ListUsers                                            => listUsers()
+    case RemoveUser(username)                                 => removeUser(username)
+    case WhoAmI                                               => whoAmI()
   }
 
   /**
