@@ -4,7 +4,7 @@ import cats.data.StateT
 import cats.effect.IO
 import cats.implicits.*
 import org.cameron.cs.file.{Directory, File, FileMetadata, FileSystemEntity}
-import org.cameron.cs.ops.{Cd, Copy, CreateDirectory, CreateFile, CreateUser, Delete, FileSystemOp, GrantPermissions, ListDirectory, ListUsers, Move, Pwd, ReadFile, RemoveUser, Rename, SetInitialPermissions, SwitchUser, WhoAmI, WriteFile}
+import org.cameron.cs.ops.{Cd, Copy, CreateDirectory, CreateFile, CreateUser, Delete, FileSystemOp, GrantPermissions, ListDirectory, ListUsers, Move, Pwd, ReadFile, RemoveUser, Rename, SetInitialPermissions, SwitchUser, Tree, WhoAmI, WriteFile}
 import org.cameron.cs.security.{Execute, Permission, Read, Write}
 import org.cameron.cs.user.User
 
@@ -371,6 +371,44 @@ object FileSystem {
   def switchUser(user: User): FileSystemStateT[Unit] = updateState(_.copy(currentUser = user))
 
   /**
+   * Recursively builds the tree structure of a directory.
+   *
+   * @param dir    The directory to start from.
+   * @param indent The current indentation level.
+   * @return The tree structure as a string.
+   */
+  private def buildTreeStructure(dir: Directory, prefix: String, indent: String): (String, Int, Int) = {
+    val (subTree, fileCount, dirCount) = dir.contents.toList.sortBy(_._1).map {
+      case (name, entity) => entity match {
+        case subdir: Directory =>
+          val (subdirTree, subdirFileCount, subdirDirCount) = buildTreeStructure(subdir, s"$prefix$name/", indent + "    ")
+          (s"$indent|-- $name/\n$subdirTree", subdirFileCount, subdirDirCount + 1)
+        case _: File =>
+          (s"$indent|-- $name", 1, 0)
+      }
+    }.unzip3
+
+    (subTree.mkString("\n"), fileCount.sum, dirCount.sum)
+  }
+
+  /**
+   * Generates a tree representation of the directory structure starting from a given path.
+   *
+   * @param path The starting path for generating the tree.
+   * @return The state transformation representing the tree generation.
+   */
+  def tree(path: String): FileSystemStateT[String] = getState.map { state =>
+    val pathList = pathToList(path)
+    findEntity(state.rootDir, pathList) match {
+      case Some(dir: Directory) =>
+        val (treeStructure, fileCount, dirCount) = buildTreeStructure(dir, "", "")
+        s"${pathList.mkString("/", "/", "")}\n$treeStructure\n\n${fileCount + dirCount} items (directories: $dirCount, files: $fileCount)"
+      case Some(file: File) => s"${pathList.mkString("/", "/", "")} - ${file.name}"
+      case None => s"Path not found: ${pathList.mkString("/", "/", "")}"
+    }
+  }
+
+  /**
    * Checks if a user has a specific permission for a path.
    * @param user The user.
    * @param permission The permission to be checked.
@@ -491,6 +529,7 @@ object FileSystem {
     case ListUsers                                            => listUsers()
     case RemoveUser(username)                                 => removeUser(username)
     case WhoAmI                                               => whoAmI()
+    case Tree(path)                                           => tree(path)  // Adding the Tree case
   }
 
   /**

@@ -4,7 +4,7 @@ import cats.implicits.*
 import org.cameron.cs.FileSystem
 import org.cameron.cs.FileSystem.{FileSystemState, FileSystemStateT, findEntity}
 import org.cameron.cs.file.{Directory, File, FileMetadata}
-import org.cameron.cs.ops.{Cd, CreateDirectory, CreateFile, CreateUser, Delete, GrantPermissions, ListUsers, Move, Pwd, ReadFile, Rename, SwitchUser, WhoAmI}
+import org.cameron.cs.ops.{Cd, CreateDirectory, CreateFile, CreateUser, Delete, GrantPermissions, ListUsers, Move, Pwd, ReadFile, Rename, SwitchUser, Tree, WhoAmI}
 import org.cameron.cs.security.{Execute, Read, Write}
 import org.cameron.cs.user.User
 import org.scalatest.funsuite.AsyncFunSuite
@@ -170,5 +170,19 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
       assert(currentUser.name == "admin")
       assert(currentUser.password == "adminpass")
     }
+  }
+
+  test("print tree structure") {
+    val program = for {
+      _    <- FileSystem.interpret(SwitchUser(initialRootUser))
+      _    <- FileSystem.interpret(CreateDirectory("/docs"))
+      _    <- FileSystem.interpret(CreateFile("/docs", "file1.txt", "Content of file1".getBytes("UTF-8"), ".txt", readable = true))
+      _    <- FileSystem.interpret(CreateDirectory("/docs/subdocs"))
+      _    <- FileSystem.interpret(CreateFile("/docs/subdocs", "file2.txt", "Content of file2".getBytes("UTF-8"), ".txt", readable = true))
+      tree <- FileSystem.interpret(Tree("/"))
+      _    =  println(tree)
+    } yield tree
+
+    runProgram(program).asserting { treeStr => assert(treeStr.nonEmpty)}
   }
 }

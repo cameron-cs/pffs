@@ -127,3 +127,8 @@ case class Cd(path: String) extends FileSystemOp[Unit]
  * Operation to get the current user.
  */
 case object WhoAmI extends FileSystemOp[User]
+
+/**
+ * Operation to get the tree of the dir.
+ */
+case class Tree(path: String) extends FileSystemOp[String]
