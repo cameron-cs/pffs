@@ -478,7 +478,7 @@ object FileSystem {
         val oldSize = d.metadata.size
         val newSize = updatedSubDir.metadata.size
         dir.copy(contents = dir.contents.updated(head, updatedSubDir), metadata = dir.metadata.copy(size = dir.metadata.size - oldSize + newSize))
-      case _ => dir
+      case _           => dir
     }
   }
 
