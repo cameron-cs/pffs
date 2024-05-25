@@ -383,7 +383,7 @@ object FileSystem {
         case subdir: Directory =>
           val (subdirTree, subdirFileCount, subdirDirCount) = buildTreeStructure(subdir, s"$prefix$name/", indent + "    ")
           (s"$indent|-- $name/\n$subdirTree", subdirFileCount, subdirDirCount + 1)
-        case _: File =>
+        case _: File      =>
           (s"$indent|-- $name", 1, 0)
       }
     }.unzip3
@@ -403,8 +403,8 @@ object FileSystem {
       case Some(dir: Directory) =>
         val (treeStructure, fileCount, dirCount) = buildTreeStructure(dir, "", "")
         s"${pathList.mkString("/", "/", "")}\n$treeStructure\n\n${fileCount + dirCount} items (directories: $dirCount, files: $fileCount)"
-      case Some(file: File) => s"${pathList.mkString("/", "/", "")} - ${file.name}"
-      case None => s"Path not found: ${pathList.mkString("/", "/", "")}"
+      case Some(file: File)     => s"${pathList.mkString("/", "/", "")} - ${file.name}"
+      case None                 => s"Path not found: ${pathList.mkString("/", "/", "")}"
     }
   }
 
