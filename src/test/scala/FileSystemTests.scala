@@ -14,7 +14,7 @@ import java.time.Instant
 class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
 
   val initialRootUser = User("root", "rootpassword")
-  val initialRoot = Directory("/", Map.empty, FileMetadata(initialRootUser, Map(initialRootUser.name -> Set(Read, Write, Execute)), Instant.now, Instant.now, initialRootUser.name))
+  val initialRoot = Directory("/", Map.empty, FileMetadata(initialRootUser, Map(initialRootUser.name -> Set(Read, Write, Execute)), Instant.now, Instant.now, initialRootUser.name, 0))
   val initialState = FileSystemState(initialRoot, initialRootUser, initialRoot, Map("root" -> initialRootUser))
 
   def runProgram[A](program: FileSystemStateT[A]): IO[A] = {
@@ -22,9 +22,10 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
   }
 
   test("create and read a file") {
+    val content = "Hello, World!".getBytes("UTF-8")
     val program = for {
       _    <- FileSystem.interpret(CreateDirectory("/docs"))
-      _    <- FileSystem.interpret(CreateFile("/docs", "file1.txt", "Hello, World!".getBytes("UTF-8"), ".txt", true))
+      _    <- FileSystem.interpret(CreateFile("/docs", "file1.txt", content, ".txt", true))
       file <- FileSystem.interpret(ReadFile("/docs/file1.txt"))
     } yield file
 
@@ -32,6 +33,7 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
       assert(file.nonEmpty)
       assert(file.get.name == "file1.txt")
       assert(new String(file.get.content, "UTF-8") == "Hello, World!")
+      assert(file.get.metadata.size == content.length)
     }
   }
 
@@ -127,9 +129,10 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
   }
 
   test("rename a file") {
+    val content = "Content to be renamed".getBytes("UTF-8")
     val program = for {
       _       <- FileSystem.interpret(CreateDirectory("/docs"))
-      _       <- FileSystem.interpret(CreateFile("/docs", "file6.txt", "Content to be renamed".getBytes("UTF-8"), ".txt", true))
+      _       <- FileSystem.interpret(CreateFile("/docs", "file6.txt", content, ".txt", true))
       _       <- FileSystem.interpret(Rename("/docs/file6.txt", "/docs/file6-renamed.txt", recursive = false))
       fileOpt <- FileSystem.interpret(ReadFile("/docs/file6-renamed.txt"))
     } yield fileOpt
@@ -138,6 +141,7 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
       assert(fileOpt.nonEmpty)
       assert(fileOpt.get.name == "file6-renamed.txt")
       assert(new String(fileOpt.get.content, "UTF-8") == "Content to be renamed")
+      assert(fileOpt.get.metadata.size == content.length)
     }
   }
 

@@ -5,4 +5,4 @@ import org.cameron.cs.user.User
 
 import java.time.Instant
 
-case class FileMetadata(owner: User, permissions: Map[String, Set[Permission]], created: Instant, lastModified: Instant, modifiedBy: String)
+case class FileMetadata(owner: User, permissions: Map[String, Set[Permission]], created: Instant, lastModified: Instant, modifiedBy: String, size: Long)

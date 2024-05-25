@@ -32,7 +32,7 @@ object FileSystem {
   def createDirectory(path: String): FileSystemStateT[Unit] =
     ensureParentDirectoryExists(path) *> updateState { state =>
       val pathList = pathToList(path)
-      val newDir = Directory(pathList.last, Map.empty, FileMetadata(state.currentUser, Map(state.currentUser.name -> defaultDirectoryPermissions), Instant.now, Instant.now, state.currentUser.name))
+      val newDir = Directory(pathList.last, Map.empty, FileMetadata(state.currentUser, Map(state.currentUser.name -> defaultDirectoryPermissions), Instant.now, Instant.now, state.currentUser.name, size = 0))
       state.copy(rootDir =
         updateDirectory(
           state.rootDir,
@@ -95,15 +95,19 @@ object FileSystem {
   def createFile(directoryPath: String, name: String, content: Array[Byte], extension: String, readable: Boolean): FileSystemStateT[Unit] =
     ensureParentDirectoryExists(directoryPath) *> updateState { state =>
       val pathList = pathToList(directoryPath)
-      val newFile = File(name, content, FileMetadata(state.currentUser, Map(state.currentUser.name -> defaultDirectoryPermissions), Instant.now, Instant.now, state.currentUser.name), extension, readable)
-      state.copy(rootDir =
-        updateDirectory(
-          state.rootDir,
-          pathList,
-          self => self.copy(contents = self.contents + (newFile.name -> newFile)))
+      val newFile = File(
+        name,
+        content,
+        FileMetadata(state.currentUser, Map(state.currentUser.name -> defaultDirectoryPermissions), Instant.now, Instant.now, state.currentUser.name, size = content.length),
+        extension,
+        readable
       )
+      state.copy(rootDir = updateDirectory(
+        state.rootDir,
+        pathList,
+        self => self.copy(contents = self.contents + (newFile.name -> newFile), metadata = self.metadata.copy(size = self.metadata.size + newFile.metadata.size))
+      ))
     }
-
   /**
    * Creates a new user with the given username and password.
    * Only the root user can create new users.
@@ -166,7 +170,7 @@ object FileSystem {
   def writeFile(path: String, content: Array[Byte], user: User): FileSystemStateT[Unit] = updateState { state =>
     checkPermission(user, Write, path, state.rootDir).fold(state)(_ =>
       state.copy(rootDir = updateEntity(state.rootDir, pathToList(path), {
-        case file: File     => file.copy(content = content, metadata = file.metadata.copy(lastModified = Instant.now, modifiedBy = user.name))
+        case file: File     => file.copy(content = content, metadata = file.metadata.copy(lastModified = Instant.now, modifiedBy = user.name, size = content.length))
         case dir: Directory => dir // no update for directories
       }))
     )
@@ -323,15 +327,15 @@ object FileSystem {
       state.flatMap(_ =>
         updateState { fsState =>
           if (findEntity(fsState.rootDir, pathToList(fsState.rootDir.name) ++ List(dir)).isEmpty) {
-            val newDir = Directory(dir, Map.empty, FileMetadata(fsState.currentUser, Map(fsState.currentUser.name -> Set(Read, Write, Execute)), Instant.now, Instant.now, fsState.currentUser.name))
+            val newDir = Directory(dir, Map.empty, FileMetadata(fsState.currentUser, Map(fsState.currentUser.name -> Set(Read, Write, Execute)), Instant.now, Instant.now, fsState.currentUser.name, size = 0))
             fsState.copy(rootDir =
               updateDirectory(
                 fsState.rootDir,
                 pathToList(newDir.name).dropRight(1),
-                self => self.copy(contents = self.contents + (newDir.name -> newDir))))
+                self => self.copy(contents = self.contents + (newDir.name -> newDir), metadata = self.metadata.copy(size = self.metadata.size + newDir.metadata.size))))
           }
           else fsState
-      })
+        })
     }
   }
 
@@ -422,10 +426,20 @@ object FileSystem {
    * @return The updated directory.
    */
   private def updateEntity(dir: Directory, path: List[String], f: FileSystemEntity => FileSystemEntity): Directory = path match {
-    case Nil            => dir
-    case head :: Nil    => dir.contents.get(head).fold(dir)(entity => dir.copy(contents = dir.contents.updated(head, f(entity))))
-    case head :: tail   => dir.contents.get(head).fold(dir) {
-      case d: Directory => dir.copy(contents = dir.contents.updated(head, updateEntity(d, tail, f)))
+    case Nil         => dir
+    case head :: Nil =>
+      dir.contents.get(head).fold(dir) { oldEntity =>
+        val updatedEntity = f(oldEntity)
+        val newSize = updatedEntity.metadata.size
+        val oldSize = oldEntity.metadata.size
+        dir.copy(contents = dir.contents.updated(head, updatedEntity), metadata = dir.metadata.copy(size = dir.metadata.size - oldSize + newSize))
+      }
+    case head :: tail => dir.contents.get(head).fold(dir) {
+      case d: Directory =>
+        val updatedSubDir = updateEntity(d, tail, f)
+        val oldSize = d.metadata.size
+        val newSize = updatedSubDir.metadata.size
+        dir.copy(contents = dir.contents.updated(head, updatedSubDir), metadata = dir.metadata.copy(size = dir.metadata.size - oldSize + newSize))
       case _ => dir
     }
   }
@@ -438,9 +452,9 @@ object FileSystem {
    * @return The updated directory.
    */
   private def updateDirectory(dir: Directory, path: List[String], f: Directory => Directory): Directory = path match {
-    case Nil                 => f(dir)
-    case head :: tail        => dir.contents.get(head).fold(dir.copy(contents = dir.contents + (head -> updateDirectory(Directory(head, Map.empty, dir.metadata), tail, f)))) {
-      case subDir: Directory => dir.copy(contents = dir.contents.updated(head, updateDirectory(subDir, tail, f)))
+    case Nil          => f(dir)
+    case head :: tail => dir.contents.get(head).fold(dir.copy(contents = dir.contents + (head -> updateDirectory(Directory(head, Map.empty, dir.metadata), tail, f)))) {
+      case subDir: Directory => dir.copy(contents = dir.contents.updated(head, updateDirectory(subDir, tail, f)), metadata = dir.metadata.copy(size = dir.metadata.size + f(subDir).metadata.size - subDir.metadata.size))
       case _                 => dir
     }
   }
