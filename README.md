@@ -81,7 +81,7 @@ The file system maintains its state in the FileSystemState case class, which inc
 
 ```scala
 val initialRootUser = User("root", "rootpassword")
-val initialRoot = Directory("/", Map.empty, FileMetadata(initialRootUser, Map(initialRootUser.name -> Set(Read, Write, Execute)), Instant.now, Instant.now, initialRootUser.name))
+val initialRoot = Directory("/", Map.empty, FileMetadata(initialRootUser, Map(initialRootUser.name -> Set(Read, Write, Execute)), Instant.now, Instant.now, initialRootUser.name, 0))
 val initialState = FileSystemState(initialRoot, initialRootUser, initialRoot, Map("root" -> initialRootUser))
 
 val program = for {
