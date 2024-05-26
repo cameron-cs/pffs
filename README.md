@@ -87,7 +87,7 @@ val initialState = FileSystemState(initialRoot, initialRootUser, initialRoot, Ma
 val program = for {
 _ <- FileSystem.interpret(CreateDirectory("/workspace"))
 _ <- FileSystem.interpret(Cd("/workspace"))
-pwd <- FileSystem.interpret(Pwd())
+pwd <- FileSystem.interpret(Pwd)
 } yield pwd
 
 runProgram(program).unsafeRunSync() // Should print: /workspace
