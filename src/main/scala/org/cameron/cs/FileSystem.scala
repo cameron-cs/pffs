@@ -4,9 +4,9 @@ import cats.data.StateT
 import cats.effect.IO
 import cats.implicits.*
 import org.cameron.cs.file.{Directory, File, FileMetadata, FileSystemEntity}
-import org.cameron.cs.ops.{Cd, Copy, CreateDirectory, CreateFile, CreateUser, Delete, FileSystemOp, GrantPermissions, ListDirectory, ListUsers, Move, Pwd, ReadFile, RemoveUser, Rename, SetInitialPermissions, SwitchUser, Tree, WhoAmI, WriteFile}
+import org.cameron.cs.ops.{Cd, Copy, CreateDirectory, CreateFile, CreateUser, Remove, Exit, FileSystemOp, GetJournal, GetSessions, GrantPermissions, ListDirectory, ListUsers, Move, Pwd, ReadFile, RemoveUser, Rename, SetInitialPermissions, SwitchUser, Tree, WhoAmI, WriteFile, WriteFileContent}
 import org.cameron.cs.security.{Execute, Permission, Read, Write}
-import org.cameron.cs.user.User
+import org.cameron.cs.user.{Session, User}
 
 import java.time.Instant
 import scala.annotation.tailrec
@@ -14,10 +14,50 @@ import scala.annotation.tailrec
 object FileSystem {
 
   // case class representing the state of the file system
-  case class FileSystemState(currentDir: Directory, currentUser: User, rootDir: Directory, users: Map[String, User], currentPath: String = "/")
+  case class FileSystemState(currentDir: Directory,
+                             currentUser: User,
+                             rootDir: Directory,
+                             users: Map[String, User],
+                             currentPath: String = "/",
+                             sessions: List[Session] = List.empty,
+                             journals: Map[String, List[String]] = Map.empty
+                            )
 
-  // Type alias for a state transformation in the context of IO
+  // type alias for a state transformation in the context of IO
   type FileSystemStateT[A] = StateT[IO, FileSystemState, A]
+
+  trait FileSystemOpVisitor[F[_]] {
+    def visit[A](op: FileSystemOp[A]): F[A]
+  }
+
+  object FileSystemOpVisitorFileSystemStateT extends FileSystemOpVisitor[FileSystemStateT] {
+    override def visit[A](op: FileSystemOp[A]): FileSystem.FileSystemStateT[A] =
+      op match {
+        case CreateFile(path, name, extension, readable) => FileSystem.createFile(path, name, extension, readable)
+        case WriteFileContent(path, name, content) => FileSystem.writeFileContent(path, name, content)
+        case CreateDirectory(path) => FileSystem.createDirectory(path)
+        case ReadFile(path) => FileSystem.readFile(path)
+        case WriteFile(path, content, user) => FileSystem.writeFile(path, content, user)
+        case Remove(path) => FileSystem.remove(path)
+        case ListDirectory(path) => FileSystem.listDirectory(path)
+        case Pwd => FileSystem.pwd
+        case Copy(srcPath, destPath, user) => FileSystem.copy(srcPath, destPath, user)
+        case Move(srcPath, destPath, user) => FileSystem.move(srcPath, destPath, user)
+        case SwitchUser(user) => FileSystem.switchUser(user)
+        case SetInitialPermissions() => FileSystem.setInitialPermissions()
+        case Rename(srcPath, destPath, recursive) => FileSystem.rename(srcPath, destPath, recursive)
+        case CreateUser(name, password) => FileSystem.createUser(name, password)
+        case GrantPermissions(path, username, permissions) => FileSystem.grantPermissions(path, username, permissions)
+        case Cd(path) => FileSystem.cd(path)
+        case ListUsers => FileSystem.listUsers
+        case RemoveUser(username) => FileSystem.removeUser(username)
+        case WhoAmI => FileSystem.whoAmI
+        case Tree(path) => FileSystem.tree(path)
+        case Exit => FileSystem.exit
+        case GetSessions => FileSystem.getSessions
+        case GetJournal => FileSystem.getJournal
+    }
+  }
 
   // default permissions for a directory
   private val defaultDirectoryPermissions: Set[Permission] = Set(Read)
@@ -87,18 +127,17 @@ object FileSystem {
    * Updates the state with the new file.
    * @param directoryPath The path of the directory where the file will be created.
    * @param name The name of the file.
-   * @param content The content of the file as a byte array.
    * @param extension The file extension.
    * @param readable A flag indicating if the file is readable.
    * @return The state transformation representing the creation of the file.
    */
-  def createFile(directoryPath: String, name: String, content: Array[Byte], extension: String, readable: Boolean): FileSystemStateT[Unit] =
+  def createFile(directoryPath: String, name: String, extension: String, readable: Boolean): FileSystemStateT[Unit] =
     ensureParentDirectoryExists(directoryPath) *> updateState { state =>
       val pathList = pathToList(directoryPath)
       val newFile = File(
         name,
-        content,
-        FileMetadata(state.currentUser, Map(state.currentUser.name -> defaultDirectoryPermissions), Instant.now, Instant.now, state.currentUser.name, size = content.length),
+        Array.empty[Byte],
+        FileMetadata(state.currentUser, Map(state.currentUser.name -> defaultDirectoryPermissions), Instant.now, Instant.now, state.currentUser.name, size = 0),
         extension,
         readable
       )
@@ -108,6 +147,28 @@ object FileSystem {
         self => self.copy(contents = self.contents + (newFile.name -> newFile), metadata = self.metadata.copy(size = self.metadata.size + newFile.metadata.size))
       ))
     }
+
+  /**
+   * Writes a content to the file in the specified directory with the given properties.
+   * Updates the state with the new file.
+   *
+   * @param directoryPath The path of the directory where the file will be created.
+   * @param name          The name of the file.
+   * @param content       The content of the file as a byte array.
+   * @return The state transformation representing the creation of the file.
+   */
+  def writeFileContent(directoryPath: String, name: String, content: Array[Byte]): FileSystemStateT[Unit] = updateState { state =>
+    val pathList = pathToList(directoryPath) :+ name
+    val entityOpt = findEntity(state.rootDir, pathList)
+
+    entityOpt match {
+      case Some(file: File) =>
+        val updatedFile = file.copy(content = content, metadata = file.metadata.copy(lastModified = Instant.now, size = content.length))
+        state.copy(rootDir = updateEntity(state.rootDir, pathList, _ => updatedFile))
+      case _                => state // or handle the error case where the file does not exist
+    }
+  }
+
   /**
    * Creates a new user with the given username and password.
    * Only the root user can create new users.
@@ -141,7 +202,7 @@ object FileSystem {
    * Returns the current user.
    * @return The current user.
    */
-  def whoAmI(): FileSystemStateT[User] = getState.map(_.currentUser)
+  def whoAmI: FileSystemStateT[User] = getState.map(_.currentUser)
 
   /**
    * Reads a file at the specified path.
@@ -182,13 +243,15 @@ object FileSystem {
    * @param path The path of the entity to be deleted.
    * @return The state transformation representing the delete operation.
    */
-  def delete(path: String): FileSystemStateT[Unit] = updateState { state =>
+  def remove(path: String): FileSystemStateT[Unit] = updateState { state =>
     checkPermission(state.currentUser, Write, path, state.rootDir).fold(state)(_ =>
       state.copy(rootDir =
         updateDirectory(
           state.rootDir,
           pathToList(path).dropRight(1),
-          self => self.copy(contents = self.contents - pathToList(path).last)))
+          self => self.copy(contents = self.contents - pathToList(path).last)
+        )
+      )
     )
   }
 
@@ -197,8 +260,11 @@ object FileSystem {
    * Only the root user can list all users.
    * @return The state transformation representing the list users operation.
    */
-  def listUsers(): FileSystemStateT[List[User]] = getState.map { state =>
-    if (state.currentUser.name == "root") state.users.values.toList else List.empty[User]
+  def listUsers: FileSystemStateT[List[User]] = getState.map { state =>
+    if (state.currentUser.name == "root")
+      state.users.values.toList
+    else
+      List.empty[User]
   }
 
   /**
@@ -270,7 +336,7 @@ object FileSystem {
    * Returns the current working directory.
    * @return The current working directory as a string.
    */
-  def pwd(): FileSystemStateT[String] = getState.map(_.currentPath)
+  def pwd: FileSystemStateT[String] = getState.map(_.currentPath)
 
   /**
    * Copies a file or directory to a new location.
@@ -284,7 +350,13 @@ object FileSystem {
       checkPermission(user, Read, srcPath, state.rootDir).flatMap(_ => findEntity(state.rootDir, pathToList(srcPath)))
     }
     _ <- entity match {
-      case Some(file: File)           => createFile(pathToList(destPath).dropRight(1).mkString("/"), pathToList(destPath).last, file.content, file.extension, file.readable)
+           case Some(file: File)      =>
+                                         val path = pathToList(destPath)
+                                         val droppedRight = path.dropRight(1).mkString("/")
+                                         for {
+                                           _ <- createFile(droppedRight, path.last, file.extension, file.readable)
+                                           _ <- writeFileContent(droppedRight, path.last, file.content)
+                                         } yield ()
       case Some(directory: Directory) => copyDirectory(directory, pathToList(destPath), user)
       case None                       => StateT.pure[IO, FileSystemState, Unit](())
     }
@@ -300,9 +372,15 @@ object FileSystem {
   def copyDirectory(directory: Directory, destPath: List[String], user: User): FileSystemStateT[Unit] = for {
     _ <- createDirectory(destPath.mkString("/"))
     _ <- directory.contents.toList.traverse {
-      case (name, file: File)        => createFile(destPath.mkString("/"), name, file.content, file.extension, file.readable)
-      case (name, subDir: Directory) => copyDirectory(subDir, destPath :+ name, user)
-    }
+           case (name, file: File) =>
+             val destPathSep = destPath.mkString("/")
+             for {
+             _ <- createFile(destPathSep, name, file.extension, file.readable)
+             _ <- writeFileContent(destPathSep, name, file.content)
+           } yield ()
+
+           case (name, subDir: Directory) => copyDirectory(subDir, destPath :+ name, user)
+         }
   } yield ()
 
   /**
@@ -313,7 +391,7 @@ object FileSystem {
    * @return The state transformation representing the move operation.
    */
   def move(srcPath: String, destPath: String, user: User): FileSystemStateT[Unit] =
-    copy(srcPath, destPath, user) *> delete(srcPath)
+    copy(srcPath, destPath, user) *> remove(srcPath)
 
   /**
    * Ensures that the parent directory exists for a given path.
@@ -368,7 +446,46 @@ object FileSystem {
    * @param user The new user.
    * @return The state transformation representing the switch user operation.
    */
-  def switchUser(user: User): FileSystemStateT[Unit] = updateState(_.copy(currentUser = user))
+  def switchUser(user: User): FileSystemStateT[Unit] = getState.flatMap { state =>
+    state.users.get(user.name) match {
+      case Some(existingUser) if existingUser.password == user.password =>
+        updateState { state =>
+          val newSession = Session(user, List.empty, Instant.now(), None)
+          if (!state.sessions.exists(_.user == user))
+            state.copy(currentUser = user, sessions = state.sessions :+ newSession)
+          else
+            state.copy(currentUser = user)
+        }
+      case _                                                            =>
+        StateT.liftF(IO.raiseError(new Exception("User does not exist or password is incorrect")))
+    }
+  }
+
+  /**
+   * Ends the session for the current user
+   *
+   * @return The state transformation representing the switch user operation.
+   */
+  private def exit: FileSystemStateT[Unit] = updateState { state =>
+    val currentUser = state.currentUser
+    val updatedSessions = state.sessions.map {
+      case session if session.user.name == currentUser.name => session.copy(disconnectedAt = Some(Instant.now))
+      case session                                          => session
+    }
+    state.copy(sessions = updatedSessions)
+  }
+
+  /**
+   * Ends the sesssion for the current user
+   *
+   * @return The state transformation representing the switch user operation.
+   */
+  private def getSessions: FileSystemStateT[List[Session]] = getState.map { state =>
+      if (state.currentUser.name == "root")
+        state.sessions
+      else
+        List.empty[Session]
+    }
 
   /**
    * Recursively builds the tree structure of a directory.
@@ -397,7 +514,7 @@ object FileSystem {
    * @param path The starting path for generating the tree.
    * @return The state transformation representing the tree generation.
    */
-  def tree(path: String): FileSystemStateT[String] = getState.map { state =>
+  private def tree(path: String): FileSystemStateT[String] = getState.map { state =>
     val pathList = pathToList(path)
     findEntity(state.rootDir, pathList) match {
       case Some(dir: Directory) =>
@@ -502,7 +619,7 @@ object FileSystem {
    * @param path The path to be converted.
    * @return The list of strings representing the path.
    */
-  def pathToList(path: String): List[String] =
+  private def pathToList(path: String): List[String] =
     path.split("/").filter(_.nonEmpty).toList
 
   /**
@@ -510,26 +627,63 @@ object FileSystem {
    * @param op The file system operation to be interpreted.
    * @return The state transformation representing the interpretation of the operation.
    */
-  def interpret[A](op: FileSystemOp[A]): FileSystemStateT[A] = op match {
-    case CreateFile(path, name, content, extension, readable) => createFile(path, name, content, extension, readable)
-    case CreateDirectory(path)                                => createDirectory(path)
-    case ReadFile(path)                                       => readFile(path)
-    case WriteFile(path, content, user)                       => writeFile(path, content, user)
-    case Delete(path)                                         => delete(path)
-    case ListDirectory(path)                                  => listDirectory(path)
-    case Pwd()                                                => pwd()
-    case Copy(srcPath, destPath, user)                        => copy(srcPath, destPath, user)
-    case Move(srcPath, destPath, user)                        => move(srcPath, destPath, user)
-    case SwitchUser(user)                                     => switchUser(user)
-    case SetInitialPermissions()                              => setInitialPermissions()
-    case Rename(srcPath, destPath, recursive)                 => rename(srcPath, destPath, recursive)
-    case CreateUser(name, password)                           => createUser(name, password)
-    case GrantPermissions(path, username, permissions)        => grantPermissions(path, username, permissions)
-    case Cd(path)                                             => cd(path)
-    case ListUsers                                            => listUsers()
-    case RemoveUser(username)                                 => removeUser(username)
-    case WhoAmI                                               => whoAmI()
-    case Tree(path)                                           => tree(path)  // Adding the Tree case
+  def interpret[A](op: FileSystemOp[A])(implicit visitor: FileSystemOpVisitor[FileSystemStateT]): FileSystemStateT[A] = {
+    getState.flatMap { state =>
+      val isRoot = state.currentUser.name != "root"
+      val shouldLogCommand = op match {
+        case _: SwitchUser | Exit | GetSessions if isRoot => false
+        case _                                            => true
+      }
+
+      val logAction =
+        if (shouldLogCommand)
+          logCommand(op.toString)
+        else
+          StateT.pure[IO, FileSystemState, Unit](())
+
+      logAction.flatMap(_ => visitor.visit(op)).flatMap { result =>
+        if (op == GetJournal && isRoot)
+          logCommand(op.toString).map(_ => result)
+        else
+          StateT.pure[IO, FileSystemState, A](result)
+      }
+    }
+  }
+
+  /**
+   * Logs a command to the journal for the current user.
+   *
+   * @param command The command to log.
+   * @return The state transformation representing the logging operation.
+   */
+  private def logCommand(command: String): FileSystemStateT[Unit] = updateState { state =>
+    val updatedSessions = state.sessions.map {
+      case session if session.user.name == state.currentUser.name =>
+        session.copy(commands = session.commands :+ command)
+      case session => session
+    }
+
+    val updatedJournal = state.journals.get(state.currentUser.name) match {
+      case Some(commands) => state.journals.updated(state.currentUser.name, commands :+ command)
+      case None => state.journals + (state.currentUser.name -> List(command))
+    }
+
+    state.copy(sessions = updatedSessions, journals = updatedJournal)
+  }
+
+  /**
+   * Returns the command journal for the current user
+   *
+   * @return The state with the current journal.
+   */
+  private def getJournal: FileSystemStateT[List[String]] = getState.map { state =>
+    if (state.currentUser.name == "root")
+      state.journals.getOrElse("root", List.empty[String])
+    else
+      state.sessions
+        .find(_.user.name == state.currentUser.name)
+        .map(_.commands)
+        .getOrElse(Nil)
   }
 
   /**

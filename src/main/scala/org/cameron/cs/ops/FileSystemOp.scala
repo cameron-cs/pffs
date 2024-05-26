@@ -2,7 +2,7 @@ package org.cameron.cs.ops
 
 import org.cameron.cs.file.{File, FileSystemEntity}
 import org.cameron.cs.security.Permission
-import org.cameron.cs.user.User
+import org.cameron.cs.user.{Session, User}
 
 /**
  * Sealed trait representing various file system operations.
@@ -13,11 +13,20 @@ sealed trait FileSystemOp[A]
  * Operation to create a file.
  * @param path The directory path where the file will be created.
  * @param name The name of the file.
- * @param content The content of the file as a byte array.
  * @param extension The file extension.
  * @param readable A flag indicating if the file is readable.
  */
-case class CreateFile(path: String, name: String, content: Array[Byte], extension: String, readable: Boolean) extends FileSystemOp[Unit]
+case class CreateFile(path: String, name: String, extension: String, readable: Boolean) extends FileSystemOp[Unit]
+
+/**
+ * Operation to write a file content.
+ * @param path The directory path where the file will be created.
+ * @param name The name of the file.
+ * @param content The content of the file as a byte array.
+ */
+case class WriteFileContent(path: String, name: String, content: Array[Byte]) extends FileSystemOp[Unit] {
+  override def toString: String = s"WriteFileContent($path,$name)"
+}
 
 /**
  * Operation to list all users. This is accessible only to the root user.
@@ -66,10 +75,10 @@ case class ReadFile(path: String) extends FileSystemOp[Option[File]]
 case class WriteFile(path: String, content: Array[Byte], user: User) extends FileSystemOp[Unit]
 
 /**
- * Operation to delete a file or directory.
+ * Operation to remove a file or directory.
  * @param path The path of the file or directory to be deleted.
  */
-case class Delete(path: String) extends FileSystemOp[Unit]
+case class Remove(path: String) extends FileSystemOp[Unit]
 
 /**
  * Operation to list the contents of a directory.
@@ -80,7 +89,7 @@ case class ListDirectory(path: String) extends FileSystemOp[List[FileSystemEntit
 /**
  * Operation to get the current working directory.
  */
-case class Pwd() extends FileSystemOp[String]
+case object Pwd extends FileSystemOp[String]
 
 /**
  * Operation to copy a file or directory to a new location.
@@ -132,3 +141,18 @@ case object WhoAmI extends FileSystemOp[User]
  * Operation to get the tree of the dir.
  */
 case class Tree(path: String) extends FileSystemOp[String]
+
+/**
+ * Operation to end the current user's session.
+ */
+case object Exit extends FileSystemOp[Unit]
+
+/**
+ * Operation to get all the user sessions.
+ */
+case object GetSessions extends FileSystemOp[List[Session]]
+
+/**
+ * Operation to get the current user's session.
+ */
+case object GetJournal extends FileSystemOp[List[String]]

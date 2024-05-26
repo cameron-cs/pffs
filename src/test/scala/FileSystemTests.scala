@@ -2,9 +2,9 @@ import cats.effect.IO
 import cats.effect.testing.scalatest.AsyncIOSpec
 import cats.implicits.*
 import org.cameron.cs.FileSystem
-import org.cameron.cs.FileSystem.{FileSystemState, FileSystemStateT, findEntity}
+import org.cameron.cs.FileSystem.{FileSystemOpVisitor, FileSystemOpVisitorFileSystemStateT, FileSystemState, FileSystemStateT, findEntity}
 import org.cameron.cs.file.{Directory, File, FileMetadata}
-import org.cameron.cs.ops.{Cd, CreateDirectory, CreateFile, CreateUser, Delete, GrantPermissions, ListUsers, Move, Pwd, ReadFile, Rename, SwitchUser, Tree, WhoAmI}
+import org.cameron.cs.ops.{Cd, CreateDirectory, CreateFile, CreateUser, Remove, Exit, GetJournal, GetSessions, GrantPermissions, ListUsers, Move, Pwd, ReadFile, Rename, SwitchUser, Tree, WhoAmI, WriteFileContent}
 import org.cameron.cs.security.{Execute, Read, Write}
 import org.cameron.cs.user.User
 import org.scalatest.funsuite.AsyncFunSuite
@@ -17,15 +17,93 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
   val initialRoot = Directory("/", Map.empty, FileMetadata(initialRootUser, Map(initialRootUser.name -> Set(Read, Write, Execute)), Instant.now, Instant.now, initialRootUser.name, 0))
   val initialState = FileSystemState(initialRoot, initialRootUser, initialRoot, Map("root" -> initialRootUser))
 
+  implicit val fileSystemOpVisitor: FileSystemOpVisitor[FileSystemStateT] = FileSystemOpVisitorFileSystemStateT
+
   def runProgram[A](program: FileSystemStateT[A]): IO[A] = {
     program.runA(initialState)
+  }
+
+  test("user session management") {
+    val program = for {
+      _ <- FileSystem.interpret(CreateUser("userTest1", "password1"))
+      _ <- FileSystem.interpret(CreateUser("userTest2", "password2"))
+      _ <- FileSystem.interpret(SwitchUser(User("userTest1", "password1")))
+      _ <- FileSystem.interpret(CreateDirectory("/docs"))
+      _ <- FileSystem.interpret(Cd("/docs"))
+      _ <- FileSystem.interpret(Pwd)
+      _ <- FileSystem.interpret(Exit)
+      _ <- FileSystem.interpret(SwitchUser(User("userTest2", "password2")))
+      _ <- FileSystem.interpret(CreateFile("/docs", "file1.txt", "txt", true))
+      _ <- FileSystem.interpret(WriteFileContent("/docs", "file1.txt", "Hello, world!".getBytes))
+      _ <- FileSystem.interpret(Exit)
+      _ <- FileSystem.interpret(SwitchUser(User("root", "rootpassword")))
+      sessions <- FileSystem.interpret(GetSessions)
+    } yield sessions
+
+    runProgram(program).asserting { sessions =>
+      assert(sessions.size == 3)
+
+      val user1SessionOpt = sessions.find(_.user.name == "userTest1")
+      assert(user1SessionOpt.nonEmpty)
+
+      val user1Session = user1SessionOpt.get
+      assert(user1Session.commands.nonEmpty)
+      assert(user1Session.commands == List("CreateDirectory(/docs)", "Cd(/docs)", "Pwd"))
+      assert(user1Session.disconnectedAt.nonEmpty)
+
+      val user2SessionOpt = sessions.find(_.user.name == "userTest2")
+      assert(user2SessionOpt.nonEmpty)
+      val user2Session = user2SessionOpt.get
+      assert(user2Session.commands == List("CreateFile(/docs,file1.txt,txt,true)", "WriteFileContent(/docs,file1.txt)"))
+      assert(user2Session.disconnectedAt.nonEmpty)
+
+      val rootSessionOpt = sessions.find(_.user.name == "root")
+      assert(rootSessionOpt.nonEmpty)
+      val rootSession = rootSessionOpt.get
+      assert(rootSession.commands == List("GetSessions"))
+      assert(rootSession.disconnectedAt.isEmpty)
+    }
+  }
+
+  test("command journaling for different users") {
+    val program = for {
+      _ <- FileSystem.interpret(CreateUser("user1", "password1"))
+      _ <- FileSystem.interpret(CreateUser("user2", "password2"))
+      _ <- FileSystem.interpret(SwitchUser(User("user1", "password1")))
+      _ <- FileSystem.interpret(CreateDirectory("/docs"))
+      _ <- FileSystem.interpret(Exit)
+      _ <- FileSystem.interpret(SwitchUser(User("user2", "password2")))
+      _ <- FileSystem.interpret(CreateFile("/docs", "file1.txt", "txt", true))
+      _ <- FileSystem.interpret(WriteFileContent("/docs", "file1.txt", "Hello, world!".getBytes))
+      _ <- FileSystem.interpret(Exit)
+      _ <- FileSystem.interpret(SwitchUser(User("user1", "password1")))
+      user1Journal <- FileSystem.interpret(GetJournal)
+      _ <- FileSystem.interpret(SwitchUser(User("user2", "password2")))
+      user2Journal <- FileSystem.interpret(GetJournal)
+      _ <- FileSystem.interpret(SwitchUser(User("root", "rootpassword")))
+      rootJournal <- FileSystem.interpret(GetJournal)
+    } yield (user1Journal, user2Journal, rootJournal)
+
+    runProgram(program).asserting { case (user1Journal, user2Journal, rootJournal) =>
+      assert(user1Journal == List("CreateDirectory(/docs)", "GetJournal"))
+
+      assert(user2Journal == List("CreateFile(/docs,file1.txt,txt,true)", "WriteFileContent(/docs,file1.txt)", "GetJournal"))
+
+      assert(rootJournal == List(
+        "CreateUser(user1,password1)",
+        "CreateUser(user2,password2)",
+        "SwitchUser(User(user1,password1))",
+        "GetJournal"
+      ))
+    }
   }
 
   test("create and read a file") {
     val content = "Hello, World!".getBytes("UTF-8")
     val program = for {
       _    <- FileSystem.interpret(CreateDirectory("/docs"))
-      _    <- FileSystem.interpret(CreateFile("/docs", "file1.txt", content, ".txt", true))
+      _    <- FileSystem.interpret(CreateFile("/docs", "file1.txt", ".txt", true))
+      _    <- FileSystem.interpret(WriteFileContent("/docs", "file1.txt", content))
       file <- FileSystem.interpret(ReadFile("/docs/file1.txt"))
     } yield file
 
@@ -55,7 +133,8 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
       _    <- FileSystem.interpret(CreateUser("user2", "password2"))
       _    <- FileSystem.interpret(SwitchUser(User("user2", "password2")))
       _    <- FileSystem.interpret(CreateDirectory("/docs"))
-      _    <- FileSystem.interpret(CreateFile("/docs", "file2.txt", "New content".getBytes("UTF-8"), ".txt", true))
+      _    <- FileSystem.interpret(CreateFile("/docs", "file2.txt", ".txt", true))
+      _    <- FileSystem.interpret(WriteFileContent("/docs", "file2.txt",  "New content".getBytes("UTF-8")))
       file <- FileSystem.interpret(ReadFile("/docs/file2.txt"))
     } yield file
 
@@ -72,7 +151,8 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
       _       <- FileSystem.interpret(CreateUser("user4", "password4"))
       _       <- FileSystem.interpret(SwitchUser(User("user3", "password3")))
       _       <- FileSystem.interpret(CreateDirectory("/docs"))
-      _       <- FileSystem.interpret(CreateFile("/docs", "file3.txt", "Shared content".getBytes("UTF-8"), ".txt", true))
+      _       <- FileSystem.interpret(CreateFile("/docs", "file3.txt", ".txt", true))
+      _       <- FileSystem.interpret(WriteFileContent("/docs", "file3.txt", "Shared content".getBytes("UTF-8")))
       _       <- FileSystem.interpret(GrantPermissions("/docs", "user4", Set(Read))) // Granting read permission to the directory
       _       <- FileSystem.interpret(GrantPermissions("/docs/file3.txt", "user4", Set(Read))) // Granting read permission to the file
       _       <- FileSystem.interpret(SwitchUser(User("user4", "password4")))
@@ -89,8 +169,9 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
   test("delete a file and verify it is deleted") {
     val program = for {
       _       <- FileSystem.interpret(CreateDirectory("/docs"))
-      _       <- FileSystem.interpret(CreateFile("/docs", "file4.txt", "To be deleted".getBytes("UTF-8"), ".txt", true))
-      _       <- FileSystem.interpret(Delete("/docs/file4.txt"))
+      _       <- FileSystem.interpret(CreateFile("/docs", "file4.txt", ".txt", true))
+      _       <- FileSystem.interpret(WriteFileContent("/docs", "file4.txt", "To be deleted".getBytes("UTF-8")))
+      _       <- FileSystem.interpret(Remove("/docs/file4.txt"))
       fileOpt <- FileSystem.interpret(ReadFile("/docs/file4.txt"))
     } yield fileOpt
 
@@ -115,7 +196,8 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
   test("move a file") {
     val program = for {
       _       <- FileSystem.interpret(CreateDirectory("/docs"))
-      _       <- FileSystem.interpret(CreateFile("/docs", "file5.txt", "Content to be moved".getBytes("UTF-8"), ".txt", true))
+      _       <- FileSystem.interpret(CreateFile("/docs", "file5.txt", ".txt", true))
+      _       <- FileSystem.interpret(WriteFileContent("/docs", "file5.txt", "Content to be moved".getBytes("UTF-8")))
       _       <- FileSystem.interpret(CreateDirectory("/archive"))
       _       <- FileSystem.interpret(Move("/docs/file5.txt", "/archive/file5.txt", User("root", "rootpassword")))
       fileOpt <- FileSystem.interpret(ReadFile("/archive/file5.txt"))
@@ -132,7 +214,8 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
     val content = "Content to be renamed".getBytes("UTF-8")
     val program = for {
       _       <- FileSystem.interpret(CreateDirectory("/docs"))
-      _       <- FileSystem.interpret(CreateFile("/docs", "file6.txt", content, ".txt", true))
+      _       <- FileSystem.interpret(CreateFile("/docs", "file6.txt", ".txt", true))
+      _       <- FileSystem.interpret(WriteFileContent("/docs", "file6.txt", content))
       _       <- FileSystem.interpret(Rename("/docs/file6.txt", "/docs/file6-renamed.txt", recursive = false))
       fileOpt <- FileSystem.interpret(ReadFile("/docs/file6-renamed.txt"))
     } yield fileOpt
@@ -149,7 +232,7 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
     val program = for {
       _   <- FileSystem.interpret(CreateDirectory("/workspace"))
       _   <- FileSystem.interpret(Cd("/workspace"))
-      pwd <- FileSystem.interpret(Pwd())
+      pwd <- FileSystem.interpret(Pwd)
     } yield pwd
 
     runProgram(program).asserting { pwd =>
@@ -162,7 +245,8 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
       _           <- FileSystem.interpret(CreateUser("admin", "adminpass"))
       _           <- FileSystem.interpret(SwitchUser(User("admin", "adminpass")))
       _           <- FileSystem.interpret(CreateDirectory("/adminDocs"))
-      _           <- FileSystem.interpret(CreateFile("/adminDocs", "adminFile.txt", "Admin only".getBytes("UTF-8"), ".txt", true))
+      _           <- FileSystem.interpret(CreateFile("/adminDocs", "adminFile.txt", ".txt", true))
+      _           <- FileSystem.interpret(WriteFileContent("/adminDocs", "adminFile.txt", "Admin only".getBytes("UTF-8")))
       currentUser <- FileSystem.interpret(WhoAmI)
     } yield currentUser
 
@@ -176,9 +260,12 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
     val program = for {
       _    <- FileSystem.interpret(SwitchUser(initialRootUser))
       _    <- FileSystem.interpret(CreateDirectory("/docs"))
-      _    <- FileSystem.interpret(CreateFile("/docs", "file1.txt", "Content of file1".getBytes("UTF-8"), ".txt", readable = true))
+      _    <- FileSystem.interpret(CreateFile("/docs", "file1.txt", ".txt", true))
+      _    <- FileSystem.interpret(WriteFileContent("/docs", "file1.txt", "Content of file1".getBytes("UTF-8")))
       _    <- FileSystem.interpret(CreateDirectory("/docs/subdocs"))
-      _    <- FileSystem.interpret(CreateFile("/docs/subdocs", "file2.txt", "Content of file2".getBytes("UTF-8"), ".txt", readable = true))
+      _    <- FileSystem.interpret(CreateFile("/docs/subdocs", "file2.txt", ".txt", true))
+      _    <- FileSystem.interpret(WriteFileContent("/docs/subdocs", "file2.txt", "Content of file2".getBytes("UTF-8")))
+
       tree <- FileSystem.interpret(Tree("/"))
       _    =  println(tree)
     } yield tree
