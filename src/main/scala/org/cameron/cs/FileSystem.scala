@@ -438,7 +438,7 @@ object FileSystem {
   def copyDirectory(directory: Directory, destPath: List[String], user: User): FileSystemStateT[Unit] = for {
     _ <- createDirectory(destPath.mkString("/"))
     _ <- directory.contents.toList.traverse {
-           case (name, file: File) =>
+           case (name, file: File)        =>
              val destPathSep = destPath.mkString("/")
              for {
              _ <- createFile(destPathSep, name, file.extension, file.readable)
