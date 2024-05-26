@@ -34,33 +34,33 @@ object FileSystem {
   object FileSystemOpVisitorFileSystemStateT extends FileSystemOpVisitor[FileSystemStateT] {
     override def visit[A](op: FileSystemOp[A]): FileSystem.FileSystemStateT[A] =
       op match {
-        case CreateFile(path, name, extension, readable) => FileSystem.createFile(path, name, extension, readable)
-        case WriteFileContent(path, name, content) => FileSystem.writeFileContent(path, name, content)
-        case CreateDirectory(path) => FileSystem.createDirectory(path)
-        case ReadFile(path) => FileSystem.readFile(path)
-        case WriteFile(path, content, user) => FileSystem.writeFile(path, content, user)
-        case Remove(path) => FileSystem.remove(path)
-        case ListDirectory(path) => FileSystem.listDirectory(path)
-        case Pwd => FileSystem.pwd
-        case Copy(srcPath, destPath, user) => FileSystem.copy(srcPath, destPath, user)
-        case Move(srcPath, destPath, user) => FileSystem.move(srcPath, destPath, user)
-        case SwitchUser(user) => FileSystem.switchUser(user)
-        case SetInitialPermissions() => FileSystem.setInitialPermissions()
-        case Rename(srcPath, destPath, recursive) => FileSystem.rename(srcPath, destPath, recursive)
-        case CreateUser(name, password) => FileSystem.createUser(name, password)
+        case CreateFile(path, name, extension, readable)   => FileSystem.createFile(path, name, extension, readable)
+        case WriteFileContent(path, name, content)         => FileSystem.writeFileContent(path, name, content)
+        case CreateDirectory(path)                         => FileSystem.createDirectory(path)
+        case ReadFile(path)                                => FileSystem.readFile(path)
+        case WriteFile(path, content, user)                => FileSystem.writeFile(path, content, user)
+        case Remove(path)                                  => FileSystem.remove(path)
+        case ListDirectory(path)                           => FileSystem.listDirectory(path)
+        case Pwd                                           => FileSystem.pwd
+        case Copy(srcPath, destPath, user)                 => FileSystem.copy(srcPath, destPath, user)
+        case Move(srcPath, destPath, user)                 => FileSystem.move(srcPath, destPath, user)
+        case SwitchUser(user)                              => FileSystem.switchUser(user)
+        case SetInitialPermissions()                       => FileSystem.setInitialPermissions()
+        case Rename(srcPath, destPath, recursive)          => FileSystem.rename(srcPath, destPath, recursive)
+        case CreateUser(name, password)                    => FileSystem.createUser(name, password)
         case GrantPermissions(path, username, permissions) => FileSystem.grantPermissions(path, username, permissions)
-        case Cd(path) => FileSystem.cd(path)
-        case ListUsers => FileSystem.listUsers
-        case RemoveUser(username) => FileSystem.removeUser(username)
-        case WhoAmI => FileSystem.whoAmI
-        case Tree(path) => FileSystem.tree(path)
-        case Exit => FileSystem.exit
-        case GetSessions => FileSystem.getSessions
-        case GetJournal => FileSystem.getJournal
-        case OpenFile(path) => FileSystem.openFile(path)
-        case CloseFile(fd) => FileSystem.closeFile(fd)
-        case ReadFileByFd(fd) => FileSystem.readFileByFd(fd)
-        case WriteFileByFd(fd, content) => FileSystem.writeFileByFd(fd, content)
+        case Cd(path)                                      => FileSystem.cd(path)
+        case ListUsers                                     => FileSystem.listUsers
+        case RemoveUser(username)                          => FileSystem.removeUser(username)
+        case WhoAmI                                        => FileSystem.whoAmI
+        case Tree(path)                                    => FileSystem.tree(path)
+        case Exit                                          => FileSystem.exit
+        case GetSessions                                   => FileSystem.getSessions
+        case GetJournal                                    => FileSystem.getJournal
+        case OpenFile(path)                                => FileSystem.openFile(path)
+        case CloseFile(fd)                                 => FileSystem.closeFile(fd)
+        case ReadFileByFd(fd)                              => FileSystem.readFileByFd(fd)
+        case WriteFileByFd(fd, content)                    => FileSystem.writeFileByFd(fd, content)
     }
   }
 
@@ -198,8 +198,7 @@ object FileSystem {
    * @return The state transformation representing the close file operation.
    */
   def closeFile(fd: Int): FileSystemStateT[Unit] = updateState { state =>
-    val updatedTable = state.descriptorTable - fd
-    state.copy(descriptorTable = updatedTable)
+    state.copy(descriptorTable = state.descriptorTable - fd)
   }
 
   /**
