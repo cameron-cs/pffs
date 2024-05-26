@@ -4,7 +4,7 @@ import cats.implicits.*
 import org.cameron.cs.FileSystem
 import org.cameron.cs.FileSystem.{FileSystemOpVisitor, FileSystemOpVisitorFileSystemStateT, FileSystemState, FileSystemStateT, findEntity}
 import org.cameron.cs.file.{Directory, File, FileMetadata}
-import org.cameron.cs.ops.{Cd, CreateDirectory, CreateFile, CreateUser, Remove, Exit, GetJournal, GetSessions, GrantPermissions, ListUsers, Move, Pwd, ReadFile, Rename, SwitchUser, Tree, WhoAmI, WriteFileContent}
+import org.cameron.cs.ops.{Cd, CloseFile, CreateDirectory, CreateFile, CreateUser, Exit, GetJournal, GetSessions, GrantPermissions, ListUsers, Move, OpenFile, Pwd, ReadFile, ReadFileByFd, Remove, Rename, SwitchUser, Tree, WhoAmI, WriteFileByFd, WriteFileContent}
 import org.cameron.cs.security.{Execute, Read, Write}
 import org.cameron.cs.user.User
 import org.scalatest.funsuite.AsyncFunSuite
@@ -271,5 +271,20 @@ class FileSystemTests extends AsyncFunSuite with AsyncIOSpec {
     } yield tree
 
     runProgram(program).asserting { treeStr => assert(treeStr.nonEmpty)}
+  }
+
+  test("open, write and read file by file descriptor") {
+    val program = for {
+      _       <- FileSystem.interpret(CreateFile("/docs", "file1.txt", "txt", true))
+      fd      <- FileSystem.interpret(OpenFile("/docs/file1.txt"))
+      _       <- FileSystem.interpret(WriteFileByFd(fd, "Hello, world!".getBytes("UTF-8")))
+      content <- FileSystem.interpret(ReadFileByFd(fd))
+      _       <- FileSystem.interpret(CloseFile(fd))
+    } yield content
+
+    runProgram(program).asserting {
+      case Some(data) => assert(data.sameElements("Hello, world!".getBytes))
+      case None       => fail("File content should not be None")
+    }
   }
 }

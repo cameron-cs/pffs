@@ -156,3 +156,23 @@ case object GetSessions extends FileSystemOp[List[Session]]
  * Operation to get the current user's session.
  */
 case object GetJournal extends FileSystemOp[List[String]]
+
+/**
+ * Operation to open the file.
+ */
+case class OpenFile(path: String) extends FileSystemOp[Int]
+
+/**
+ * Operation to close the file.
+ */
+case class CloseFile(fd: Int) extends FileSystemOp[Unit]
+
+/**
+ * Operation to read the file by file descriptor.
+ */
+case class ReadFileByFd(fd: Int) extends FileSystemOp[Option[Array[Byte]]]
+
+/**
+ * Operation to write the content to the file by file descriptor.
+ */
+case class WriteFileByFd(fd: Int, content: Array[Byte]) extends FileSystemOp[Unit]

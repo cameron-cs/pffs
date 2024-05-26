@@ -4,7 +4,7 @@ import cats.data.StateT
 import cats.effect.IO
 import cats.implicits.*
 import org.cameron.cs.file.{Directory, File, FileMetadata, FileSystemEntity}
-import org.cameron.cs.ops.{Cd, Copy, CreateDirectory, CreateFile, CreateUser, Remove, Exit, FileSystemOp, GetJournal, GetSessions, GrantPermissions, ListDirectory, ListUsers, Move, Pwd, ReadFile, RemoveUser, Rename, SetInitialPermissions, SwitchUser, Tree, WhoAmI, WriteFile, WriteFileContent}
+import org.cameron.cs.ops.{Cd, CloseFile, Copy, CreateDirectory, CreateFile, CreateUser, Exit, FileSystemOp, GetJournal, GetSessions, GrantPermissions, ListDirectory, ListUsers, Move, OpenFile, Pwd, ReadFile, ReadFileByFd, Remove, RemoveUser, Rename, SetInitialPermissions, SwitchUser, Tree, WhoAmI, WriteFile, WriteFileByFd, WriteFileContent}
 import org.cameron.cs.security.{Execute, Permission, Read, Write}
 import org.cameron.cs.user.{Session, User}
 
@@ -20,8 +20,9 @@ object FileSystem {
                              users: Map[String, User],
                              currentPath: String = "/",
                              sessions: List[Session] = List.empty,
-                             journals: Map[String, List[String]] = Map.empty
-                            )
+                             journals: Map[String, List[String]] = Map.empty,
+                             nextFd: Int = 0,
+                             descriptorTable: Map[Int, String] = Map.empty)
 
   // type alias for a state transformation in the context of IO
   type FileSystemStateT[A] = StateT[IO, FileSystemState, A]
@@ -56,6 +57,10 @@ object FileSystem {
         case Exit => FileSystem.exit
         case GetSessions => FileSystem.getSessions
         case GetJournal => FileSystem.getJournal
+        case OpenFile(path) => FileSystem.openFile(path)
+        case CloseFile(fd) => FileSystem.closeFile(fd)
+        case ReadFileByFd(fd) => FileSystem.readFileByFd(fd)
+        case WriteFileByFd(fd, content) => FileSystem.writeFileByFd(fd, content)
     }
   }
 
@@ -69,7 +74,7 @@ object FileSystem {
    * @param path The path where the directory will be created.
    * @return The state transformation representing the creation of the directory.
    */
-  def createDirectory(path: String): FileSystemStateT[Unit] =
+  private def createDirectory(path: String): FileSystemStateT[Unit] =
     ensureParentDirectoryExists(path) *> updateState { state =>
       val pathList = pathToList(path)
       val newDir = Directory(pathList.last, Map.empty, FileMetadata(state.currentUser, Map(state.currentUser.name -> defaultDirectoryPermissions), Instant.now, Instant.now, state.currentUser.name, size = 0))
@@ -89,7 +94,7 @@ object FileSystem {
    * @param permissions The set of permissions to be granted.
    * @return The state transformation representing the permission grant.
    */
-  def grantPermissions(path: String, username: String, permissions: Set[Permission]): FileSystemStateT[Unit] = updateState { state =>
+  private def grantPermissions(path: String, username: String, permissions: Set[Permission]): FileSystemStateT[Unit] = updateState { state =>
     val pathList = pathToList(path)
     val entityOpt = findEntity(state.rootDir, pathList)
     if (entityOpt.exists(entity => entity.metadata.owner.name == state.currentUser.name || state.currentUser.name == "root")) {
@@ -169,6 +174,67 @@ object FileSystem {
     }
   }
 
+  /**
+   * Opens a file at the specified path and returns a file descriptor (fd).
+   * Updates the state with the new file descriptor.
+   *
+   * @param path The path of the file to be opened.
+   * @return The state transformation representing the open file operation, yielding the file descriptor.
+   */
+  def openFile(path: String): FileSystemStateT[Int] = for {
+    _ <- updateState { state =>
+      val fd = state.nextFd
+      val updatedTable = state.descriptorTable + (fd -> path)
+      state.copy(nextFd = fd + 1, descriptorTable = updatedTable)
+    }
+    state <- getState
+  } yield state.nextFd - 1
+
+  /**
+   * Closes a file identified by the file descriptor (fd).
+   * Updates the state by removing the file descriptor from the descriptor table.
+   *
+   * @param fd The file descriptor of the file to be closed.
+   * @return The state transformation representing the close file operation.
+   */
+  def closeFile(fd: Int): FileSystemStateT[Unit] = updateState { state =>
+    val updatedTable = state.descriptorTable - fd
+    state.copy(descriptorTable = updatedTable)
+  }
+
+  /**
+   * Reads the content of a file identified by the file descriptor (fd).
+   *
+   * @param fd The file descriptor of the file to be read.
+   * @return The state transformation representing the read file operation, yielding an option of the file content.
+   */
+  def readFileByFd(fd: Int): FileSystemStateT[Option[Array[Byte]]] = {
+    getState.flatMap { state =>
+      state.descriptorTable.get(fd) match {
+        case Some(path) =>
+          readFile(path).map {
+            case Some(file) => Some(file.content)
+            case None => None
+          }
+        case None =>
+          StateT.pure[IO, FileSystemState, Option[Array[Byte]]](None)
+      }
+    }
+  }
+
+  /**
+   * Writes content to a file identified by the file descriptor (fd).
+   *
+   * @param fd The file descriptor of the file to be written to.
+   * @param content The content to be written to the file.
+   * @return The state transformation representing the write file operation.
+   */
+  def writeFileByFd(fd: Int, content: Array[Byte]): FileSystemStateT[Unit] = getState.flatMap { state =>
+    state.descriptorTable.get(fd) match {
+      case Some(path) => writeFile(path, content, state.currentUser)
+      case None => StateT.pure[IO, FileSystemState, Unit](())
+    }
+  }
   /**
    * Creates a new user with the given username and password.
    * Only the root user can create new users.
@@ -629,23 +695,17 @@ object FileSystem {
    */
   def interpret[A](op: FileSystemOp[A])(implicit visitor: FileSystemOpVisitor[FileSystemStateT]): FileSystemStateT[A] = {
     getState.flatMap { state =>
-      val isRoot = state.currentUser.name != "root"
+      val isRoot = state.currentUser.name == "root"
       val shouldLogCommand = op match {
-        case _: SwitchUser | Exit | GetSessions if isRoot => false
-        case _                                            => true
+        case _: SwitchUser | Exit | GetSessions if !isRoot => false
+        case _                                             => true
       }
 
-      val logAction =
-        if (shouldLogCommand)
-          logCommand(op.toString)
-        else
-          StateT.pure[IO, FileSystemState, Unit](())
+      val logAction = if (shouldLogCommand) logCommand(op.toString) else StateT.pure[IO, FileSystemState, Unit](())
 
       logAction.flatMap(_ => visitor.visit(op)).flatMap { result =>
-        if (op == GetJournal && isRoot)
-          logCommand(op.toString).map(_ => result)
-        else
-          StateT.pure[IO, FileSystemState, A](result)
+        if (op == GetJournal && !isRoot) logCommand(op.toString).map(_ => result)
+        else StateT.pure[IO, FileSystemState, A](result)
       }
     }
   }
