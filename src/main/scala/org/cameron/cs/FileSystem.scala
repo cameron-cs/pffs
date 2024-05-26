@@ -416,15 +416,15 @@ object FileSystem {
       checkPermission(user, Read, srcPath, state.rootDir).flatMap(_ => findEntity(state.rootDir, pathToList(srcPath)))
     }
     _ <- entity match {
-           case Some(file: File)      =>
-                                         val path = pathToList(destPath)
-                                         val droppedRight = path.dropRight(1).mkString("/")
-                                         for {
-                                           _ <- createFile(droppedRight, path.last, file.extension, file.readable)
-                                           _ <- writeFileContent(droppedRight, path.last, file.content)
-                                         } yield ()
-      case Some(directory: Directory) => copyDirectory(directory, pathToList(destPath), user)
-      case None                       => StateT.pure[IO, FileSystemState, Unit](())
+           case Some(file: File)          =>
+                                              val path = pathToList(destPath)
+                                              val droppedRight = path.dropRight(1).mkString("/")
+                                              for {
+                                                _ <- createFile(droppedRight, path.last, file.extension, file.readable)
+                                                _ <- writeFileContent(droppedRight, path.last, file.content)
+                                              } yield ()
+           case Some(directory: Directory) => copyDirectory(directory, pathToList(destPath), user)
+           case None                       => StateT.pure[IO, FileSystemState, Unit](())
     }
   } yield ()
 
