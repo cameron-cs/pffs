@@ -633,9 +633,9 @@ object FileSystem {
   private def findEntity(dir: Directory, path: List[String]): Option[FileSystemEntity] = path match {
     case Nil                 => Some(dir)
     case head :: tail        => dir.contents.get(head).flatMap {
-                                  case subDir: Directory => findEntity(subDir, tail)
+                                  case subDir: Directory          => findEntity(subDir, tail)
                                   case file: File if tail.isEmpty => Some(file)
-                                  case _ => None
+                                  case _                          => None
                                 }
   }
 
