@@ -139,18 +139,17 @@ object FileSystem {
   def createFile(directoryPath: String, name: String, extension: String, readable: Boolean): FileSystemStateT[Unit] =
     ensureParentDirectoryExists(directoryPath) *> updateState { state =>
       val pathList = pathToList(directoryPath)
-      val newFile = File(
-        name,
-        Array.empty[Byte],
-        FileMetadata(state.currentUser, Map(state.currentUser.name -> defaultDirectoryPermissions), Instant.now, Instant.now, state.currentUser.name, size = 0),
-        extension,
-        readable
-      )
+      val newFile = File(name,
+                         Array.empty[Byte],
+                         FileMetadata(state.currentUser, Map(state.currentUser.name -> defaultDirectoryPermissions), Instant.now, Instant.now, state.currentUser.name, size = 0),
+                         extension,
+                         readable)
       state.copy(rootDir = updateDirectory(
         state.rootDir,
         pathList,
         self => self.copy(contents = self.contents + (newFile.name -> newFile), metadata = self.metadata.copy(size = self.metadata.size + newFile.metadata.size))
-      ))
+      )
+      )
     }
 
   /**
@@ -352,21 +351,21 @@ object FileSystem {
           val newName = destPathList.last
           val updatedDir = entity match {
             case dir: Directory if recursive => updateDirectory(
-              state.rootDir,
-              parentPath,
-              self => self.copy(contents = self.contents - dir.name + (newName -> renameDirectory(dir, newName)))
-            )
+                                                  state.rootDir,
+                                                  parentPath,
+                                                  self => self.copy(contents = self.contents - dir.name + (newName -> renameDirectory(dir, newName)))
+                                                )
             case dir: Directory              => updateDirectory(
-              state.rootDir,
-              parentPath,
-              self => self.copy(contents = self.contents - dir.name + (newName -> dir.copy(name = newName)))
-            )
+                                                  state.rootDir,
+                                                  parentPath,
+                                                  self => self.copy(contents = self.contents - dir.name + (newName -> dir.copy(name = newName)))
+                                                )
             case file: File                  => updateDirectory(
-              state.rootDir,
-              parentPath,
-              self => self.copy(contents = self.contents - file.name + (newName -> file.copy(name = newName))))
-          }
-          state.copy(rootDir = updatedDir)
+                                                  state.rootDir,
+                                                  parentPath,
+                                                  self => self.copy(contents = self.contents - file.name + (newName -> file.copy(name = newName))))
+                                                }
+                                                state.copy(rootDir = updatedDir)
         }
       }
     }
@@ -381,9 +380,9 @@ object FileSystem {
   private def renameDirectory(dir: Directory, newName: String): Directory = {
     val updatedContents = dir.contents.map {
       case (name, entity) => entity match {
-        case subDir: Directory => newName -> renameDirectory(subDir, name)
-        case file: File        => name -> file.copy(name = newName)
-      }
+                                      case subDir: Directory => newName -> renameDirectory(subDir, name)
+                                      case file: File        => name -> file.copy(name = newName)
+                                    }
     }
     dir.copy(name = newName, contents = updatedContents)
   }
